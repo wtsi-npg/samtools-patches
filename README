@@ -1,0 +1,5 @@
+
+This repository contains patches for samtools releases (see http://sourceforge.net/projects/samtools/files/samtools/)
+
+samtools-0.1.18_irods_bi_patch130312: This patch fixes the "bam in path" bug and adds irods support (modelled on the existing support for ftp and http protocols)
+
