@@ -28,15 +28,17 @@ and the samtools source from here: http://sourceforge.net/projects/samtools/file
 
 Before rebuilding samtools, you'll need the iRODS client libraries. If you want to build the iRODS client stuff yourself, it is relatively straightforward - here is how I built version 2.5:
 
-Uncomment the line in config/config.mk.in line 307:
+Because we use Kerberos authentication and the library was not where iRODS expected it, I first had to make a couple of small changes to the configuration files. 
 
-   KRB_AUTH = 1
+  Uncomment the line in config/config.mk.in line 307:
 
-now change the KRB_LOC value in line 309:
+    KRB_AUTH = 1
 
-  KRB_LOC=/usr/lib
+  now change the KRB_LOC value in line 309:
 
-then use the irodssetup script to build the client:
+    KRB_LOC=/usr/lib
+
+I then used the supplied irodssetup script to build the client:
 
     kl2@sfnode:~kl2/src/irods/iRODS_2.5$ ./irodssetup
 
