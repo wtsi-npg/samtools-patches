@@ -1,5 +1,102 @@
 
-This repository contains patches for samtools releases (see http://sourceforge.net/projects/samtools/files/samtools/)
+March 2012
+Kevin Lewis
+Wellcome Trust Sanger Institute
+kl2@sanger.ac.uk
 
-samtools-0.1.18_irods_bi_patch130312: This patch fixes the "bam in path" bug and adds irods support (modelled on the existing support for ftp and http protocols)
+This repository contains patches for samtools releases (see http://sourceforge.net/projects/samtools/files/samtools/) which allow samtools to treat files prefixed with irods: in a similar way to how it already handles http:// and ftp:// data. What I've done is take the isio routines from the iRODS source (https://www.irods.org/index.php/Downloads), done some bug fixing and amending, added it to the samtools code and tweaked the relevant samtools code to use the new routines (most changes in knetfile.c, bam_index.c and the Makefiles).
+
+===========================
+Patch list and descriptions
+===========================
+ samtools-0.1.18_irods_bi_patch130312 - a patch for samtools-0.1.18. Enables viewing of bam files stored in iRODS by prefixing the file name with "irods:" (modelled on the existing support for ftp and http protocols). Also fixes a bug in bam_index.c which caused the download of the index file to fail when "bam" appeared in the path specified for the target file.
+
+
+=======================
+= HOWTO apply a patch =
+=======================
+
+=====================================
+1. Download iRODS and samtools source
+=====================================
+You should be able to download the iRODS source from here: https://www.irods.org/index.php/Downloads
+and the samtools source from here: http://sourceforge.net/projects/samtools/files/samtools/
+
+========================
+2. Build iRODS libraries
+========================
+
+Before rebuilding samtools, you'll need the iRODS client libraries. If you want to build the iRODS client stuff yourself, it is relatively straightforward - here is how I built version 2.5:
+
+Uncomment the line in config/config.mk.in line 307:
+
+   KRB_AUTH = 1
+
+now change the KRB_LOC value in line 309:
+
+  KRB_LOC=/usr/lib
+
+then use the irodssetup script to build the client:
+
+    kl2@sfnode:~kl2/src/irods/iRODS_2.5$ ./irodssetup
+
+    ...
+    Include additional prompts for advanced settings [no]?
+    ...
+    Build an iRODS server [yes]? no
+    ...
+    Include GSI [no]?
+    ...
+    Save configuration (irods.config) [yes]?
+    ...
+    Start iRODS build [yes]?
+    ...
+
+===========================
+3. Patch and build samtools
+===========================
+
+Now you can prepare and build samtools (I use samtools-0.1.18 here):
+
+First, apply the relevant patch to the samtools source, e.g.:
+
+  kl2@sfnode:~/src/samtools/samtools-0.1.18$ patch -p1 < ../samtools-0.1.18_irods_bi_patch060312
+  patching file bam.h
+  patching file bam_index.c
+  patching file bcftools/Makefile
+  patching file faidx.c
+  patching file isio.c
+  patching file isio.h
+  patching file isio_macros.h
+  patching file knetfile.c
+  patching file knetfile.h
+  patching file Makefile
+
+do the build:
+
+  kl2@sfnode:~/src/samtools/samtools-0.1.18$ ST_INCLUDE_IRODS=1 IRODS_BASE=~kl2/src/irods/iRODS2.5 make
+
+**************************************************************************************************************************
+**************************************************************************************************************************
+**************************************************************************************************************************
+
+===============================
+Example use of the new samtools
+===============================
+  kl2@sfnode:~/src/samtools/samtools-0.1.18$ ./samtools view -h irods:/seqfiles/1111/1111_3#25.bam
+  @HD	VN:1.0	SO:coordinate
+  @SQ	SN:1	LN:249250621	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:1b22b98cdeb4a9304cb5d48026a85128	SP:Human
+  @SQ	SN:2	LN:243199373	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:a0d9851da00400dec1098a9255ac712e	SP:Human
+  @SQ	SN:3	LN:198022430	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:fdfd811849cc2fadebc929bb925902e5	SP:Human
+  @SQ	SN:4	LN:191154276	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:23dccd106897542ad87d2765d28a19a1	SP:Human
+  @SQ	SN:5	LN:180915260	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:0740173db9ffd264d728f32784845cd7	SP:Human
+  @SQ	SN:6	LN:171115067	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:1d3a93a248d92a729ee764823acbbc6b	SP:Human
+  @SQ	SN:7	LN:159138663	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:618366e953d6aaad97dbe4777c29375e	SP:Human
+  @SQ	SN:8	LN:146364022	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:96f514a9929e410c6651697bded59aec	SP:Human
+  @SQ	SN:9	LN:141213431	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:3e273117f15e0a400f01055d9f393768	SP:Human
+  @SQ	SN:10	LN:135534747	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:988c28e000e84c26d552359af1ea2e1d	SP:Human
+  @SQ	SN:11	LN:135006516	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:98c59049a2df285c76ffb1c6db8f8b96	SP:Human
+  @SQ	SN:12	LN:133851895	UR:ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz	AS:NCBI37	M5:51851ac0e1a115847ad36449b0015864	SP:Human
+  ...
+
 
