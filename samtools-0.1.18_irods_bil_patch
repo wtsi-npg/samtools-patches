@@ -1,0 +1,1231 @@
+diff -ruN samtools-0.1.18/bam.h samtools-0.1.18_irods_bif/bam.h
+--- samtools-0.1.18/bam.h	2011-09-02 17:58:47.000000000 +0100
++++ samtools-0.1.18_irods_bif/bam.h	2012-01-25 00:34:02.909431000 +0000
+@@ -40,7 +40,12 @@
+   @copyright Genome Research Ltd.
+  */
+ 
++#ifdef __DO_IRODS__
++#define BAM_VERSION "0.1.18 (r982:295:irods_v01)"
++#else
+ #define BAM_VERSION "0.1.18 (r982:295)"
++#endif
++
+ 
+ #include <stdint.h>
+ #include <stdlib.h>
+diff -ruN samtools-0.1.18/bam_index.c samtools-0.1.18_irods_bif/bam_index.c
+--- samtools-0.1.18/bam_index.c	2011-09-02 17:58:47.000000000 +0100
++++ samtools-0.1.18_irods_bif/bam_index.c	2012-01-25 00:34:02.912432000 +0000
+@@ -385,22 +385,31 @@
+ {
+ 	FILE *fp;
+ 	char *fnidx, *fn;
++	const char *p;
++	int fn_len;
+ 
++#ifdef __DO_IRODS__
++	if (strstr(_fn, "ftp://") == _fn || strstr(_fn, "http://") == _fn || strstr(_fn, "irods:") == _fn) {
++		p=rindex(_fn, '/');
++		if(p== NULL) p=rindex(_fn, ':');
++#else
+ 	if (strstr(_fn, "ftp://") == _fn || strstr(_fn, "http://") == _fn) {
+-		const char *p;
+-		int l = strlen(_fn);
+-		for (p = _fn + l - 1; p >= _fn; --p)
+-			if (*p == '/') break;
++		p=rindex(_fn, '/');
++#endif
+ 		fn = strdup(p + 1);
+-	} else fn = strdup(_fn);
+-	fnidx = (char*)calloc(strlen(fn) + 5, 1);
+-	strcpy(fnidx, fn); strcat(fnidx, ".bai");
+-	fp = fopen(fnidx, "rb");
+-	if (fp == 0) { // try "{base}.bai"
+-		char *s = strstr(fn, "bam");
+-		if (s == fn + strlen(fn) - 3) {
+-			strcpy(fnidx, fn);
+-			fnidx[strlen(fn)-1] = 'i';
++	}
++	else {
++		fn = strdup(_fn);
++	}
++
++	fn_len = strlen(fn);
++
++	fnidx = (char *)calloc(fn_len + 5, 1);
++	strcpy(fnidx, fn);
++	strcat(fnidx, ".bai");
++	if((fp = fopen(fnidx, "rb")) == NULL) { // try "{base}.bai"
++		if(fn_len >= 4 && !strncmp(fnidx + fn_len - 4, ".bam", 4)) {
++			strcpy(fnidx+fn_len-1, "i");
+ 			fp = fopen(fnidx, "rb");
+ 		}
+ 	}
+@@ -421,18 +430,23 @@
+ 	uint8_t *buf;
+ 	knetFile *fp_remote;
+ 	int l;
++
++#ifdef __DO_IRODS__
++	if (strstr(url, "ftp://") != url && strstr(url, "http://") != url && strstr(url, "irods:") != url) return;
++#else
+ 	if (strstr(url, "ftp://") != url && strstr(url, "http://") != url) return;
++#endif
+ 	l = strlen(url);
+ 	for (fn = (char*)url + l - 1; fn >= url; --fn)
+ 		if (*fn == '/') break;
+ 	++fn; // fn now points to the file name
+ 	fp_remote = knet_open(url, "r");
+ 	if (fp_remote == 0) {
+-		fprintf(stderr, "[download_from_remote] fail to open remote file.\n");
++		fprintf(stderr, "[download_from_remote(\"%s\")] fail to open remote file.\n", url);
+ 		return;
+ 	}
+ 	if ((fp = fopen(fn, "wb")) == 0) {
+-		fprintf(stderr, "[download_from_remote] fail to create file in the working directory.\n");
++		fprintf(stderr, "[download_from_remote(\"%s\")] fail to create file in the working directory.\n", url);
+ 		knet_close(fp_remote);
+ 		return;
+ 	}
+@@ -453,14 +467,37 @@
+ bam_index_t *bam_index_load(const char *fn)
+ {
+ 	bam_index_t *idx;
+-	idx = bam_index_load_local(fn);
++	char *fnidx = NULL;
++	int len;
++
++	idx = bam_index_load_local(fn);	/* if it's already downloaded locally, use that */
++
++#ifdef __DO_IRODS__
++	if (idx == 0 && (strstr(fn, "ftp://") == fn || strstr(fn, "http://" ) == fn || strstr(fn, "irods:" ) == fn)) {
++#else
+ 	if (idx == 0 && (strstr(fn, "ftp://") == fn || strstr(fn, "http://") == fn)) {
+-		char *fnidx = calloc(strlen(fn) + 5, 1);
+-		strcat(strcpy(fnidx, fn), ".bai");
+-		fprintf(stderr, "[bam_index_load] attempting to download the remote index file.\n");
++#endif
++		len = strlen(fn);
++		fnidx = calloc(len + 5, 1);
++		strcpy(fnidx, fn);
++		strcat(fnidx, ".bai");  /* first try just tacking on ".bai" */
+ 		download_from_remote(fnidx);
+ 		idx = bam_index_load_local(fn);
++
++		if(idx == 0) {
++			/* the open (and presumably the download) failed - so now try
++				just changing the ".bam" extension (if there is one)
++				to ".bai" and attempt another download and open */
++			len = strlen(fnidx);
++			if(len >= 8 && !strcmp(fnidx+len-8, ".bam.bai")) {
++				strcpy(fnidx+len-5, "i");	/* just change ".bam" extension to ".bai" if possible */
++				download_from_remote(fnidx);
++				idx = bam_index_load_local(fn);
++			}
++		}
++
+ 	}
++
+ 	if (idx == 0) fprintf(stderr, "[bam_index_load] fail to load BAM index.\n");
+ 	return idx;
+ }
+diff -ruN samtools-0.1.18/bcftools/Makefile samtools-0.1.18_irods_bif/bcftools/Makefile
+--- samtools-0.1.18/bcftools/Makefile	2011-07-07 03:59:22.000000000 +0100
++++ samtools-0.1.18_irods_bif/bcftools/Makefile	2012-01-25 00:34:02.930438000 +0000
+@@ -8,6 +8,16 @@
+ INCLUDES=	
+ SUBDIRS=	.
+ 
++LIBIRODS=
++ifdef ST_INCLUDE_IRODS
++ifndef IRODS_BASE
++IRODS_BASE = ../../../irods/iRODS
++endif
++DFLAGS += -D __DO_IRODS__
++LIBIRODS = -L $(IRODS_BASE)/lib/core/obj -l RodsAPIs -lpthread -ldl -lgssapi_krb5
++AOBJS += $(OMISC)/isio.o
++endif
++
+ .SUFFIXES:.c .o
+ 
+ .c.o:
+@@ -31,7 +41,7 @@
+ 		$(AR) -csru $@ $(LOBJS)
+ 
+ bcftools:lib $(AOBJS)
+-		$(CC) $(CFLAGS) -o $@ $(AOBJS) -L. $(LIBPATH) -lbcf -lm -lz
++		$(CC) $(CFLAGS) -o $@ $(AOBJS) -L. $(LIBPATH) -lbcf -lm -lz $(LIBIRODS)
+ 
+ bcf.o:bcf.h
+ vcf.o:bcf.h
+diff -ruN samtools-0.1.18/faidx.c samtools-0.1.18_irods_bif/faidx.c
+--- samtools-0.1.18/faidx.c	2011-07-07 03:59:22.000000000 +0100
++++ samtools-0.1.18_irods_bif/faidx.c	2012-01-25 00:34:02.954440000 +0000
+@@ -264,7 +264,11 @@
+ 	sprintf(str, "%s.fai", fn);
+ 
+ #ifdef _USE_KNETFILE
++# ifdef __DO_IRODS__
++    if (strstr(fn, "ftp://") == fn || strstr(fn, "http://") == fn || strstr(fn, "irods:") == fn)
++#else
+     if (strstr(fn, "ftp://") == fn || strstr(fn, "http://") == fn)
++#endif
+     {
+         fp = download_and_open(str);
+         if ( !fp )
+diff -ruN samtools-0.1.18/isio.c samtools-0.1.18_irods_bif/isio.c
+--- samtools-0.1.18/isio.c	1970-01-01 01:00:00.000000000 +0100
++++ samtools-0.1.18_irods_bif/isio.c	2012-01-25 00:35:05.217924000 +0000
+@@ -0,0 +1,818 @@
++/* 
++   irods standard i/o emulation library  (initial version)
++   
++   This package converts Unix standard I/O calls (stdio.h: fopen,
++   fread, fwrite, etc) to the equivalent irods calls.  To convert an
++   application you just need to add an include statement (isio.h) and
++   recompile and relink with irods libraries.  fopen calls with input
++   filenames that include the IRODS_PREFIX string ('irods:') will be
++   opened and handled as iRODS files; without the prefix this package
++   will call the fopen family to handle them as regular local files.
++
++   Like the fopen family, this library does some caching to avoid
++   small I/O (network) calls, greatly improving performance.
++
++   The user callable functions are defined in the isio.h and are of
++   the form irodsNAME, such as irodsfopen.  Internal function names
++   begin with 'isio'.
++
++   The irods environment is assummed.  That is, like i-commands, this
++   library needs to read the user's .irodsEnv and authentication files
++   to be able to connect to an iRODS server.
++
++   See the ../include/isio.h, ../test*.c files, and ../Makefile for
++   more information.
++
++ */
++
++#include <stdio.h>
++#include <signal.h>
++
++#include "rodsClient.h"
++#include "dataObjRead.h"
++
++#include "isio.h"
++
++#define IRODS_PREFIX "irods:"
++#define ISIO_MAX_OPEN_FILES 20
++
++/* The following two numberic values are also used by the
++   test script (modified to be smaller as a test) */
++#define ISIO_INITIAL_BUF_SIZE  65536
++#define ISIO_MAX_BUF_SIZE    2097152
++
++#define ERRMSSZ 128
++
++int debug=0;
++
++/*
++Static function prototypes
++*/
++static int isioSetup(void);
++static ISIO_FILE *new_isio_file(long l1descInx);
++static int destroy_isio_file(ISIO_FILE *ifp);
++static FILE *add_to_map(ISIO_FILE *ifp);
++static ISIO_FILE *is_in_map(int idx);
++static int offset_in_current_buffer(ISIO_FILE *ifp, long offset, int whence, long *adj);
++static char *copy_filename(const char *filename);
++
++/* set up communcation with iRODS */
++static int setupFlag=0;
++char localZone[100]="";
++rcComm_t *Comm;
++rodsEnv myRodsEnv;
++
++/*
++isioSetup:
++Subsequent calls after successful setup just return 0 (no error)
++*/
++static int isioSetup(void)
++{
++	int status;
++	rErrMsg_t errMsg;
++	char *mySubName;
++	char *myName;
++
++	if (debug) printf("isioSetup\n");
++
++	if(setupFlag != 0)
++		return(0);
++
++	if((status = getRodsEnv (&myRodsEnv)) < 0) {
++		rodsLogError(LOG_ERROR, status, "isioSetup: getRodsEnv error.");
++	}
++	Comm = rcConnect (myRodsEnv.rodsHost, myRodsEnv.rodsPort, myRodsEnv.rodsUserName, myRodsEnv.rodsZone, 0, &errMsg);
++
++	if(Comm == NULL) {
++		myName = rodsErrorName(errMsg.status, &mySubName);
++		rodsLog(LOG_ERROR, "rcConnect failure %s (%s) (%d) %s",
++				myName,
++				mySubName,
++				errMsg.status,
++				errMsg.msg);
++		status = errMsg.status;
++		return(status);
++	}
++
++	/*
++	revert SIGPIPE handler to default.
++	Note: this is done to cause sensible behaviour with downstream pipes (head, more,...), but this also means that
++	any SIGPIPE signals from the server side will also be fatal. (See _rcConnect() in lib/core/src/rcConnect.c in
++	the iRODS source code)
++	*/
++	signal(SIGPIPE, SIG_DFL);
++
++	if((status = clientLogin(Comm)) == 0) {
++		setupFlag=1;
++	}
++
++	return(status);
++}
++
++
++/* _cacheInfo handling routines */
++
++static ISIO_FILE *_cacheInfo[ISIO_MAX_OPEN_FILES] = { NULL };
++
++static ISIO_FILE *new_isio_file(long l1descInx)
++{
++	ISIO_FILE *ret = NULL;
++
++	if((ret=calloc(1, sizeof(ISIO_FILE))) != NULL) {
++		ret->base_offset = 0L;
++		if((ret->base=malloc(sizeof(char) * ISIO_INITIAL_BUF_SIZE)) == NULL) {
++			fprintf(stderr, "new_isio_file: failed to allocate base buffer of size %d\n", ISIO_INITIAL_BUF_SIZE);
++			free(ret);
++			return(NULL);
++		}
++		ret->bufferSize = sizeof(char) * ISIO_INITIAL_BUF_SIZE;
++		ret->ptr = ret->base;
++		ret->count = 0;
++		ret->usingUsersBuffer = 'n';
++		ret->written = 0;
++		ret->l1descInx = l1descInx;
++	}
++
++	return(ret);
++}
++
++static int destroy_isio_file(ISIO_FILE *ifp)
++{
++	if(ifp == NULL)
++		return(-1);
++
++	if(ifp->usingUsersBuffer == 'n')
++		free(ifp->base);
++
++	free(ifp);
++
++	return(0);
++}
++
++static FILE *add_to_map(ISIO_FILE *ifp)
++{
++	int i;
++
++	if(ifp == NULL) {
++		return(NULL);
++	}
++
++	for(i=0; i<ISIO_MAX_OPEN_FILES; i++) {
++		if(_cacheInfo[i] == NULL) {
++			_cacheInfo[i] = ifp;
++			return((FILE *)((unsigned long)i+1));	/* don't use index 0 (would look like NULL) */
++		}
++	}
++
++	fprintf(stderr, "Too many open files in add_to_map\n");
++
++	return(NULL);
++}
++
++static ISIO_FILE *is_in_map(int idx)
++{
++	idx--;	/* initially 1-based, so adjust to array index */
++	if((idx >= 0) && (idx < ISIO_MAX_OPEN_FILES))
++		return(_cacheInfo[idx]);
++	else
++		return(NULL);
++}
++
++/*
++isioFileOpen:
++Return: if error NULL, else pointer to ISIO_FILE
++
++Note: although parseRodsPathStr() treats "filename" as const, the declaration in 
++lib/core/include/rodsPath.h doesn't use the "const" keyword.  Since the iRODS code
++is unwilling to guarantee no alteration to the contents of filename (and the
++compiler complains), I've added the inefficient strdup()/free().
++*/
++ISIO_FILE *isioFileOpen(const char *filename, char *modes)
++{
++	int status;
++	dataObjInp_t dataObjInp;
++	char *fn_copy = NULL;
++
++	if(filename == NULL) return(NULL);
++
++	if(debug) printf("isioFileOpen: %s\n", filename);
++
++	if(isioSetup()) return(NULL);
++
++	memset (&dataObjInp, 0, sizeof (dataObjInp));
++
++	if((fn_copy=copy_filename(filename)) == NULL) return(NULL);
++	status = parseRodsPathStr (fn_copy , &myRodsEnv, dataObjInp.objPath);
++	free(fn_copy);
++
++	if(status < 0) {
++		rodsLogError (LOG_ERROR, status, "isioFileOpen");
++		return(NULL);
++	}
++
++	/* Set the openFlags based on the input mode (incomplete
++		* currently) // */
++	dataObjInp.openFlags = O_RDONLY;
++	if(strncmp(modes,"w",1)==0) {
++		dataObjInp.openFlags = O_WRONLY;
++		/* Need to handle other cases sometime */
++	}
++	if(strncmp(modes,"r+",2)==0) {
++		dataObjInp.openFlags = O_RDWR;
++	}
++
++	status = rcDataObjOpen (Comm, &dataObjInp);
++
++	if (status==CAT_NO_ROWS_FOUND && dataObjInp.openFlags == O_WRONLY) {
++		status = rcDataObjCreate(Comm, &dataObjInp);
++	}
++
++	if(status < 0) {
++		char errms[ERRMSSZ];
++
++		snprintf(errms, ERRMSSZ, "isioFileOpen(%s, %s)", filename, modes);
++		rodsLogError (LOG_NOTICE, status, errms);
++		return(NULL);
++	}
++
++	return(new_isio_file(status));
++}
++
++/*
++copy_filename:
++	strdup() with some error checking
++	Note: the caller is responsible for freeing the allocated memory
++*/
++static char *copy_filename(const char *filename)
++{
++	char *fn_copy = NULL;
++
++	if((fn_copy = strdup(filename)) == NULL) {
++		rodsLogError(LOG_ERROR, SYS_MALLOC_ERR, "isioFileOpen/copy_filename");
++		return(NULL);
++	}
++
++	return(fn_copy);
++}
++
++FILE *irodsfopen(char *filename, char *modes)
++{
++	int len;
++
++	if (debug) printf("irodsfopen: %s\n", filename);
++
++	len = strlen(IRODS_PREFIX);
++	if(strncmp(filename,IRODS_PREFIX,len)==0) {
++		return(add_to_map(isioFileOpen(filename+len, modes)));
++	}
++	else {
++		return(fopen(filename, modes));
++	}
++}
++
++int isioFillBuffer(ISIO_FILE *ifp)
++{
++	int status;
++	openedDataObjInp_t dataObjReadInp;
++	bytesBuf_t dataObjReadOutBBuf;
++
++	if (debug) printf("isioFillBuffer\n");
++
++	dataObjReadOutBBuf.buf = ifp->base;
++	dataObjReadOutBBuf.len = ifp->bufferSize;
++
++	memset(&dataObjReadInp, 0, sizeof (dataObjReadInp));
++
++	dataObjReadInp.l1descInx = ifp->l1descInx;
++	dataObjReadInp.len = ifp->bufferSize;
++
++	status = rcDataObjRead(Comm, &dataObjReadInp, &dataObjReadOutBBuf);
++
++	if(debug) printf("isioFillBuffer rcDataObjRead stat: %d\n", status);
++	if(status < 0) return(status);
++
++/*	ifp->base_offset += status; */
++	ifp->ptr = ifp->base;
++	ifp->count = status;
++
++	return(0);
++}
++
++int isioFileRead(ISIO_FILE *ifp, void *buffer, int maxToRead)
++{
++	int status;
++	int reqSize;
++	char *myPtr;
++	int count;
++	int toMove;
++	int newBufSize;
++
++	if (debug) printf("isioFileRead\n");
++
++	/* If the buffer had been used for writing, flush it */
++	if((status = isioFlush(ifp)) < 0) return(status);
++
++	reqSize = maxToRead;
++	myPtr = buffer;
++	if(ifp->count > 0) {	/* there is something unread in the cache */
++		if(ifp->count >= reqSize) {	/* there is enough in the cache for this request */
++			memcpy(myPtr, ifp->ptr, reqSize);
++			ifp->ptr += reqSize;
++			ifp->count -= reqSize;
++			return(maxToRead);
++		}
++		else {	/* not enough data in cache for the request - copy what's available and flag a cache refresh by setting count element to 0 */
++			memcpy(myPtr,ifp->ptr, ifp->count);
++			ifp->ptr += ifp->count;
++			reqSize -=  ifp->count;
++			myPtr += ifp->count;
++			ifp->count = 0;
++		}
++	}
++
++	newBufSize=(2*maxToRead)+8;
++
++	if(ifp->usingUsersBuffer == 'y') {
++		/* previous time we used user's buffer, this time either
++			allocate a new one or use their's this time too. */
++		ifp->bufferSize = 0;
++	}
++
++	if(newBufSize > ifp->bufferSize) {
++		if(newBufSize<=ISIO_MAX_BUF_SIZE) {
++			if(ifp->usingUsersBuffer == 'n') {
++				if (debug) printf("isioFileRead calling free\n");
++				free(ifp->base);
++			}
++			if(debug) printf("isioFileRead calling malloc\n");
++			ifp->base=malloc(newBufSize);
++			if(ifp->base==NULL) {
++				fprintf(stderr,"Memory Allocation error\n");
++				return(0);
++			}
++			ifp->bufferSize = newBufSize;
++			ifp->usingUsersBuffer = 'n';
++		}
++		else {
++			/* Use user's buffer */
++			ifp->base=buffer;
++			ifp->bufferSize = maxToRead;
++			ifp->usingUsersBuffer = 'y';
++		}
++		ifp->ptr = ifp->base;
++		ifp->count = 0;
++	}
++
++	if((status = isioFillBuffer(ifp)) < 0) return(status);
++
++	if(ifp->usingUsersBuffer=='y') {
++		count = ifp->count;
++		ifp->count = 0;
++		if(debug) printf("isioFileRead return1: %d\n", count);
++		return(count);
++	}
++
++	if(ifp->count > 0) {
++		toMove = reqSize;
++		if(ifp->count < reqSize) {
++			toMove=ifp->count;
++		}
++		memcpy(myPtr, ifp->ptr, toMove);
++		ifp->ptr += toMove;
++		ifp->count -= toMove;
++		myPtr += toMove;
++		reqSize -= toMove;
++	}
++	count = (void *)myPtr - buffer;
++	if(debug) printf("isioFileRead return2: %d\n", count);
++	return(count);
++}
++
++size_t irodsfread(void *buffer, size_t itemsize, size_t nitems, FILE *fi_stream)
++{
++	int i;
++	ISIO_FILE *ifp;
++
++	i = (int)(unsigned long)fi_stream;
++	if (debug) printf("isiofread: %d\n", i);
++
++
++	if((ifp=is_in_map(i)) != NULL) {
++		return(isioFileRead(ifp, buffer, itemsize*nitems));
++	}
++	else {
++		return(fread(buffer, itemsize, nitems, fi_stream));
++	}
++}
++
++int isioFileWrite(ISIO_FILE *ifp, void *buffer, int countToWrite)
++{
++	int status;
++	int spaceInBuffer;
++	int newBufSize;
++	openedDataObjInp_t dataObjWriteInp;
++	bytesBuf_t dataObjWriteOutBBuf;
++
++	if(debug) printf("isioFileWrite\n");
++
++	if(ifp->count > 0) {
++		/* buffer has read data in it, so seek to where the
++			the app thinks the pointer is and disgard the buffered
++			read data */
++		long offset;
++		offset = - ifp->count;
++		status = isioFileSeek(ifp, offset, SEEK_CUR);
++		if (status) return(status);
++		ifp->ptr=ifp->base;
++		ifp->count = 0;
++	}
++
++	spaceInBuffer = ifp->bufferSize - ifp->written;
++                   
++	if (debug) printf("isioFileWrite: spaceInBuffer %d\n", spaceInBuffer);
++	if (countToWrite < spaceInBuffer) {
++		/* Fits in the buffer, just cache it */
++		if (debug) printf("isioFileWrite: caching 1 %p %d\n", ifp->ptr, countToWrite);
++		memcpy(ifp->ptr, buffer, countToWrite);
++		ifp->ptr += countToWrite;
++		ifp->written += countToWrite;
++		return(countToWrite);
++	}
++
++	status = isioFlush(ifp); /* if anything is buffered, flush it */
++	if(status < 0) return(status);
++
++	if(countToWrite > ISIO_MAX_BUF_SIZE) {
++		/* Too big to cache, just send it */
++		dataObjWriteOutBBuf.buf = buffer;
++		dataObjWriteOutBBuf.len = countToWrite;
++
++		memset(&dataObjWriteInp, 0, sizeof (dataObjWriteInp));
++
++		dataObjWriteInp.l1descInx = ifp->l1descInx;
++		dataObjWriteInp.len = countToWrite;
++
++		status = rcDataObjWrite (Comm, &dataObjWriteInp, &dataObjWriteOutBBuf);
++		if (debug) printf("isioFileWrite: rcDataWrite 2 %d\n", status);
++		if (status < 0) return(status);
++
++		return(status);  /* total bytes written */
++	}
++
++	newBufSize=(2*countToWrite)+8;  /* Possible next size */
++	if (newBufSize > ISIO_MAX_BUF_SIZE) {
++		newBufSize = ISIO_MAX_BUF_SIZE;
++	}
++
++	if(newBufSize > ifp->bufferSize) {
++		/* free old and make new larger buffer */
++		if(ifp->usingUsersBuffer == 'n') {
++			if (debug) printf("isioFilewrite calling free\n");
++			free(ifp->base);
++		}
++		if (debug) printf("isioFilewrite calling malloc %d\n", newBufSize);
++
++		if((ifp->base=malloc(newBufSize)) == NULL) {
++			fprintf(stderr,"Memory Allocation error\n");
++			return(0);
++		}
++		ifp->bufferSize = newBufSize;
++		ifp->usingUsersBuffer = 'n';
++		ifp->ptr=ifp->base;
++	}
++
++	/* Now it fits in the buffer, so cache it */
++	if (debug) printf("isioFileWrite: caching 2 %p %d\n", ifp->ptr, countToWrite);
++
++	memcpy(ifp->ptr, buffer, countToWrite);
++	ifp->ptr += countToWrite;
++	ifp->count -= countToWrite; //??
++	ifp->written += countToWrite;
++	return(countToWrite);
++}
++
++size_t irodsfwrite(void *buffer, size_t itemsize, size_t nitems, FILE *fi_stream)
++{
++	int i;
++	ISIO_FILE *ifp;
++
++	i = (int)(unsigned long)fi_stream;
++	if (debug) printf("irodsfwrite: %d\n", i);
++
++	if((ifp=is_in_map(i)) != NULL) {
++		return(isioFileWrite(ifp, buffer, itemsize*nitems));
++	}
++	else {
++		return(fwrite(buffer, itemsize, nitems, fi_stream));
++	}
++}
++
++int isioFileClose(ISIO_FILE *ifp)
++{
++	openedDataObjInp_t dataObjCloseInp;
++	int status;
++
++	if(debug) printf("isioFileClose\n");
++
++	/* If the buffer had been used for writing, flush it */
++	if((status = isioFlush(ifp)) < 0) return(status);
++
++	memset (&dataObjCloseInp, 0, sizeof (dataObjCloseInp));
++	dataObjCloseInp.l1descInx = ifp->l1descInx;
++
++	destroy_isio_file(ifp);
++
++	return(rcDataObjClose(Comm, &dataObjCloseInp));
++}
++
++int irodsfclose(FILE *fi_stream)
++{
++	int i;
++	ISIO_FILE *ifp;
++
++	i = (int)(unsigned long)fi_stream;
++	if (debug) printf("isiofclose: %d\n", i);
++
++	if((ifp=is_in_map(i)) != NULL) {
++		return(isioFileClose(ifp));
++	}
++	else {
++		return(fclose(fi_stream));
++	}
++}
++
++int isioFileTell(ISIO_FILE *ifp)
++{
++	openedDataObjInp_t seekParam;
++	fileLseekOut_t* seekResult = NULL;
++	int status;
++
++	if (debug) printf("isioFileTell\n");
++
++	memset(&seekParam,  0, sizeof(openedDataObjInp_t));
++	seekParam.l1descInx = ifp->l1descInx;
++	seekParam.offset  = 0L;
++	seekParam.whence  = SEEK_CUR;
++	if((status = rcDataObjLseek(Comm, &seekParam, &seekResult )) < 0) {
++		rodsLogError(LOG_ERROR, status, "isioFileSeek");
++	}
++
++	return((uint64_t)(seekResult->offset));
++}
++
++long irodsftell(FILE *fi_stream)
++{
++	int i;
++	ISIO_FILE *ifp;
++
++	i = (int)(unsigned long)fi_stream;
++
++	if (debug) printf("isiofseek: %d\n", i);
++
++	if((ifp=is_in_map(i)) != NULL) {
++		return(isioFileTell(ifp));
++	}
++	else {
++		return(ftell(fi_stream));
++	}
++}
++
++/*
++If the new read position (offset) is within the cached data, simply adjust cacheinfo values.
++Otherwise, perform the seek using rcDataObjLseek() and set cacheinfo values to reflect absence of cached data
++*/
++int isioFileSeek(ISIO_FILE *ifp, long offset, int whence)
++{
++	openedDataObjInp_t seekParam;
++	fileLseekOut_t* seekResult = NULL;
++	int status = 0;
++	long adj = 0L;
++
++	if (debug) printf("isioFileSeek\n");
++
++	if(offset_in_current_buffer(ifp, offset, whence, &adj)) {
++		ifp->ptr += adj;
++		ifp->count -= adj;
++	}
++	else {
++		memset(&seekParam,  0, sizeof(openedDataObjInp_t));
++		seekParam.l1descInx = ifp->l1descInx;
++		seekParam.offset  = offset;
++		seekParam.whence  = whence;
++		if((status = rcDataObjLseek(Comm, &seekParam, &seekResult)) < 0) {
++			rodsLogError(LOG_ERROR, status, "isioFileSeek");
++		}
++
++		ifp->base_offset = isioFileTell(ifp) - status;
++		
++		ifp->count = 0;   /* force cache refresh */
++	}
++
++	if(status > 0) status = 0;	/* fseek should return 0 for success, so adjust */
++
++	return(status);
++}
++
++/*
++offset_in_current_buffer:
++determine if requested position is within the current cacheInfo buffer
++	if it isn't, return 0
++	otherwise: return 1 and return calculated adjustment in *adj (if adj is not NULL)
++*/
++static int offset_in_current_buffer(ISIO_FILE *ifp, long offset, int whence, long *adj)
++{
++	if(ifp->base == NULL || ifp->ptr == NULL || ifp->bufferSize <= 0 || (ifp->ptr - ifp->base) + ifp->count <= 0) {
++		return(0);
++	}
++
++	if(whence == SEEK_SET) {
++
++		if(offset >= 0
++			&& offset >= ifp->base_offset
++			&& offset < (ifp->base_offset + ifp->ptr - ifp->base) + ifp->count) {
++
++			if(adj != NULL) {
++				*adj = (offset - ifp->base_offset) - (ifp->ptr - ifp->base);
++			}
++
++			return(1);
++		}
++		else {
++			return(0);
++		}
++
++	}
++	else if(whence == SEEK_CUR) {
++
++		if(offset > 0) {
++			if(offset <= ifp->count) {
++				if(adj != NULL)
++					*adj = offset;
++
++				return(1);
++			}
++			else {
++				return(0);
++			}
++		}
++		else if(offset < 0) {
++			if(((ifp->ptr - ifp->base) + offset) > 0) {
++				if(adj != NULL)
++					*adj = offset;
++
++				return(1);
++			}
++			else {
++				return(0); 
++			}
++		}
++		else {
++			if(adj != NULL)
++				*adj = 0;
++			return(1);	/* zero offset must be in buffer */
++		}
++
++	}
++	else if(whence == SEEK_END) {
++		return(0);	/* just do the data read to buffer */
++	}
++	else {
++		return(0);	/* unrecognised whence value ignored? */
++	}
++
++	return(0);
++}
++
++int irodsfseek(FILE *fi_stream, long offset, int whence)
++{
++	int i;
++	ISIO_FILE *ifp;
++
++	i = (int)(unsigned long)fi_stream;
++
++	if (debug) printf("isiofseek: %d\n", i);
++
++	if((ifp=is_in_map(i)) != NULL) {
++		return(isioFileSeek(ifp, offset, whence));
++	}
++	else {
++		return(fseek(fi_stream, offset, whence));
++	}
++}
++
++int isioFlush(ISIO_FILE *ifp)
++{
++	openedDataObjInp_t dataObjWriteInp;
++	bytesBuf_t dataObjWriteOutBBuf;
++	int status;
++
++	if (debug) printf("isioFlush\n");
++
++	if(ifp->written > 0) {
++
++		dataObjWriteOutBBuf.buf = ifp->base;
++		dataObjWriteOutBBuf.len = ifp->written;
++
++		memset(&dataObjWriteInp, 0, sizeof(dataObjWriteInp));
++
++		dataObjWriteInp.l1descInx = ifp->l1descInx;
++		dataObjWriteInp.len = ifp->written;
++
++		if(debug) printf("isioFlush: writing %d\n", ifp->written);
++		status = rcDataObjWrite(Comm, &dataObjWriteInp, &dataObjWriteOutBBuf);
++		if(status >= 0) {
++			ifp->ptr = ifp->base;
++			ifp->written = 0;
++		}
++
++		return(status);
++	}
++
++	return(0);
++}
++
++int irodsfflush(FILE *fi_stream)
++{
++	int i;
++	ISIO_FILE *ifp;
++
++	i = (int)(unsigned long)fi_stream;
++
++	if (debug) printf("isiofflush: %d\n", i);
++
++	if((ifp=is_in_map(i)) != NULL) {
++		return(isioFlush(ifp));
++	}
++	else {
++		return(fflush(fi_stream));
++	}
++}
++
++int isioFilePutc(int inchar, ISIO_FILE *ifp)
++{
++	int mychar;
++
++	mychar = inchar;
++
++	return(isioFileWrite(ifp, &mychar, 1));
++}
++
++int irodsfputc(int inchar, FILE *fi_stream)
++{
++	int i;
++	ISIO_FILE *ifp;
++
++	i = (int)(unsigned long)fi_stream;
++	if (debug) printf("isiofputc: %d\n", i);
++
++	if((ifp=is_in_map(i)) != NULL) {
++		return(isioFilePutc(inchar, ifp));
++	}
++	else {
++		return(fputc(inchar, fi_stream));
++	}
++}
++
++int isioFileGetc(ISIO_FILE *ifp)
++{
++	int mychar=0;
++	int status;
++
++	status = isioFileRead(ifp, &mychar, 1);
++
++	if (status==0) return(EOF);
++
++	if (status<0) return(status);
++
++	return(mychar);
++}
++
++int irodsfgetc(FILE *fi_stream)
++{
++	int i;
++	ISIO_FILE *ifp;
++
++	i = (int)(unsigned long)fi_stream;
++	if (debug) printf("isiofgetc: %d\n", i);
++
++	if((ifp=is_in_map(i)) != NULL) {
++		return(isioFileGetc(ifp));
++	}
++	else {
++		return(fgetc(fi_stream));
++	}
++}
++
++
++void irodsexit(int exitValue)
++{
++	int status;
++
++	if (debug) printf("irodsexit: %d\n", exitValue);
++
++	if (setupFlag>0) {
++		status = rcDisconnect(Comm);
++	}
++	exit(exitValue);
++}
++
+diff -ruN samtools-0.1.18/isio.h samtools-0.1.18_irods_bif/isio.h
+--- samtools-0.1.18/isio.h	1970-01-01 01:00:00.000000000 +0100
++++ samtools-0.1.18_irods_bif/isio.h	2012-01-25 00:34:02.999440000 +0000
+@@ -0,0 +1,42 @@
++/* iRODS unix stdio i/o functions; emulate a subset of stdio.h
++ * calls */
++
++#ifndef IRODS_IO_H
++#define IRODS_IO_H
++
++#include <stdio.h>
++
++typedef struct _isio_file {
++	long base_offset;    /* how far base is from start of file */
++	char *base;          /* actual data cache */
++	int bufferSize;      /* size of cache (actual space malloced) */
++	char *ptr;           /* current read position in cache */
++	int count;           /* how many unread bytes remain in cache */
++	char usingUsersBuffer; /* y or n when active */
++	int written;          /* contains count of bytes written */
++	long l1descInx;	/* returned by rcDataObjCreate() */
++} ISIO_FILE;
++
++FILE *irodsfopen(char *filename, char *modes);
++size_t irodsfread(void *buffer, size_t itemsize, size_t nitems, FILE *fi_stream);
++size_t irodsfwrite(void *buffer, size_t itemsize, size_t nitems, FILE *fi_stream);
++int irodsfclose(FILE *fi_stream);
++long irodsftell(FILE *fi_stream);
++int irodsfseek(FILE *fi_stream, long offset, int whence);
++int irodsfflush(FILE *fi_stream);
++int irodsfputc(int inchar, FILE *fi_stream);
++int irodsfgetc(FILE *fi_stream);
++void irodsexit(int exitValue);
++
++ISIO_FILE *isioFileOpen(const char *filename, char *modes);
++int isioFillBuffer(ISIO_FILE *ifp);
++int isioFileRead(ISIO_FILE *ifp, void *buffer, int maxToRead);
++int isioFileWrite(ISIO_FILE *ifp, void *buffer, int countToWrite);
++int isioFileClose(ISIO_FILE *ifp);
++int isioFileTell(ISIO_FILE *ifp);
++int isioFileSeek(ISIO_FILE *ifp, long offset, int whence);
++int isioFlush(ISIO_FILE *ifp);
++int isioFilePutc(int inchar, ISIO_FILE *ifp);
++int isioFileGetc(ISIO_FILE *ifp);
++
++#endif /* IRODS_IO_H */
+diff -ruN samtools-0.1.18/isio_macros.h samtools-0.1.18_irods_bif/isio_macros.h
+--- samtools-0.1.18/isio_macros.h	1970-01-01 01:00:00.000000000 +0100
++++ samtools-0.1.18_irods_bif/isio_macros.h	2012-01-25 00:34:03.017447000 +0000
+@@ -0,0 +1,21 @@
++/* iRODS unix stdio i/o functions; emulate a subset of stdio.h
++ * calls */
++
++#ifndef ISIO_MACROS_H
++#define ISIO_MACROS_H
++
++#include "isio.h"
++
++#define fopen(A,B) irodsfopen(A,B)
++#define fread(A,B,C,D) irodsfread(A,B,C,D)
++#define fclose(A) irodsfclose(A)
++#define exit(A) irodsexit(A)
++#define fwrite(A,B,C,D) irodsfwrite(A,B,C,D)
++#define fseek(A,B,C) irodsfseek(A,B,C)
++#define fflush(A) irodsfflush(A)
++#define fputc(A, B) irodsfputc(A,B)
++#define fgetc(A) irodsfgetc(A)
++
++#include <stdio.h>
++
++#endif /* IRODS_IO_H */
+diff -ruN samtools-0.1.18/knetfile.c samtools-0.1.18_irods_bif/knetfile.c
+--- samtools-0.1.18/knetfile.c	2011-03-01 19:50:25.000000000 +0000
++++ samtools-0.1.18_irods_bif/knetfile.c	2012-01-25 00:34:03.041446000 +0000
+@@ -43,6 +43,10 @@
+ #include <sys/socket.h>
+ #endif
+ 
++#if __DO_IRODS__
++#include "isio.h"
++#endif
++
+ #include "knetfile.h"
+ 
+ /* In winsock.h, the type of a socket is SOCKET, which is: "typedef
+@@ -444,6 +448,7 @@
+ 	return 0;
+ }
+ 
++
+ /********************
+  * Generic routines *
+  ********************/
+@@ -467,6 +472,18 @@
+ 		fp = khttp_parse_url(fn, mode);
+ 		if (fp == 0) return 0;
+ 		khttp_connect_file(fp);
++#if __DO_IRODS__
++	} else if (strstr(fn, "irods:") == fn) {
++		ISIO_FILE *sfd = isioFileOpen(fn+6, "r");
++		if(sfd == NULL) {
++			return 0;
++		}
++		fp = (knetFile*)calloc(1, sizeof(knetFile));
++		fp->type = KNF_TYPE_IRODS;
++		fp->fp = (ISIO_FILE *)sfd;
++		fp->fd = 0;     /* avoid close below */
++		fp->ctrl_fd = -1;
++#endif
+ 	} else { // local file
+ #ifdef _WIN32
+ 		/* In windows, O_BINARY is necessary. In Linux/Mac, O_BINARY may
+@@ -513,6 +530,23 @@
+ 		if (fp->is_ready == 0)
+ 			khttp_connect_file(fp);
+ 	}
++#if __DO_IRODS__
++	else if (fp->type == KNF_TYPE_IRODS) {
++		off_t rest = len, curr;
++
++		while(rest > 0) {
++			curr = isioFileRead(fp->fp, buf + l, rest);
++			if (curr < 0) return -1;
++			if (curr == 0) break;	/* ? */
++			l += curr; rest -= curr;
++		}
++
++		fp->offset += l;
++
++		return(l);      /* unlike other remote protocols, doesn't use my_netread */
++	}
++#endif
++
+ 	if (fp->type == KNF_TYPE_LOCAL) { // on Windows, the following block is necessary; not on UNIX
+ 		off_t rest = len, curr;
+ 		while (rest) {
+@@ -568,6 +602,20 @@
+ 		fp->is_ready = 0;
+ 		return 0;
+ 	}
++#if __DO_IRODS__
++	else if (fp->type == KNF_TYPE_IRODS)  {
++		isioFileSeek(fp->fp, off, whence);
++		if (whence==SEEK_CUR)
++			fp->offset += off;
++		else if (whence==SEEK_SET)
++			fp->offset = off;
++		else if (whence==SEEK_END)
++			fp->offset = isioFileTell(fp->fp);
++
++		return 0;
++	}
++#endif
++
+ 	errno = EINVAL;
+     fprintf(stderr,"[knet_seek] %s\n", strerror(errno));
+ 	return -1;
+diff -ruN samtools-0.1.18/knetfile.h samtools-0.1.18_irods_bif/knetfile.h
+--- samtools-0.1.18/knetfile.h	2010-11-17 04:16:36.000000000 +0000
++++ samtools-0.1.18_irods_bif/knetfile.h	2012-01-25 00:34:03.059450000 +0000
+@@ -15,11 +15,18 @@
+ #define netclose(fd) closesocket(fd)
+ #endif
+ 
++#ifdef __DO_IRODS__
++#include "isio.h"
++#endif
++
+ // FIXME: currently I/O is unbuffered
+ 
+ #define KNF_TYPE_LOCAL 1
+ #define KNF_TYPE_FTP   2
+ #define KNF_TYPE_HTTP  3
++#ifdef __DO_IRODS__
++#define KNF_TYPE_IRODS  4
++#endif
+ 
+ typedef struct knetFile_s {
+ 	int type, fd;
+@@ -34,6 +41,12 @@
+ 
+ 	// the following are for HTTP only
+ 	char *path, *http_host;
++
++#ifdef __DO_IRODS__
++        // the following is for iRODS only
++        ISIO_FILE *fp;
++#endif
++
+ } knetFile;
+ 
+ #define knet_tell(fp) ((fp)->offset)
+diff -ruN samtools-0.1.18/Makefile samtools-0.1.18_irods_bif/Makefile
+--- samtools-0.1.18/Makefile	2011-07-07 03:59:22.000000000 +0100
++++ samtools-0.1.18_irods_bif/Makefile	2012-01-25 00:34:03.083449000 +0000
+@@ -14,6 +14,19 @@
+ SUBDIRS=	. bcftools misc
+ LIBPATH=
+ LIBCURSES=	-lcurses # -lXCurses
++LIBIRODS=
++
++ifdef ST_INCLUDE_IRODS
++ifndef IRODS_BASE
++IRODS_BASE = ../../irods/iRODS
++endif
++INCLUDES += -I $(IRODS_BASE)/lib/api/include -I $(IRODS_BASE)/lib/core/include -I $(IRODS_BASE)/lib/md5/include -I $(IRODS_BASE)/server/core/include -I $(IRODS_BASE)/server/icat/include -I $(IRODS_BASE)/server/drivers/include -I $(IRODS_BASE)/server/re/include
++DFLAGS += -D __DO_IRODS__
++LOBJS += isio.o
++LIBIRODS = -L $(IRODS_BASE)/lib/core/obj -l RodsAPIs -lpthread -ldl -lgssapi_krb5
++endif
++
++
+ 
+ .SUFFIXES:.c .o
+ 
+@@ -41,7 +54,7 @@
+ 		$(AR) -csru $@ $(LOBJS)
+ 
+ samtools:lib-recur $(AOBJS)
+-		$(CC) $(CFLAGS) -o $@ $(AOBJS) -Lbcftools $(LIBPATH) libbam.a -lbcf $(LIBCURSES) -lm -lz
++		$(CC) $(CFLAGS) -o $@ $(AOBJS) -Lbcftools $(LIBPATH) libbam.a -lbcf $(LIBCURSES) -lm -lz $(LIBIRODS)
+ 
+ razip:razip.o razf.o $(KNETFILE_O)
+ 		$(CC) $(CFLAGS) -o $@ razf.o razip.o $(KNETFILE_O) -lz
+@@ -68,6 +81,8 @@
+ phase.o:bam.h khash.h ksort.h
+ bamtk.o:bam.h
+ 
++isio.o:isio.h
++
+ faidx.o:faidx.h razf.h khash.h
+ faidx_main.o:faidx.h razf.h
+ 
