@@ -11,6 +11,8 @@ Patch list and descriptions
 ===========================
  samtools-0.1.18_irods_bi_patch130312 - a patch for samtools-0.1.18. Enables viewing of bam files stored in iRODS by prefixing the file name with "irods:" (modelled on the existing support for ftp and http protocols). Also fixes a bug in bam_index.c which caused the download of the index file to fail when "bam" appeared in the path specified for the target file.
 
+ samtools-0.1.18_irods_bil_patch - a patch for samtools-0.1.18. This contains a bug in the fseek/fread routines in the isio code. You should use a more recent patch.
+
 
 =======================
 = HOWTO apply a patch =
